@@ -22,7 +22,6 @@ level INTEGER
 
 load_dotenv("ini.env")
 
-
 async def main():
     bot = Bot(token=os.getenv("q"))
     dp = Dispatcher()
