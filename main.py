@@ -20,11 +20,11 @@ level INTEGER
 )
 ''')
 
-load_dotenv()
+load_dotenv("ini.env")
 
 
 async def main():
-    bot = Bot(token=os.getenv("BOT_TOKEN"))
+    bot = Bot(token=os.getenv("q"))
     dp = Dispatcher()
     dp.include_router(handlers.router)
     await dp.start_polling(bot)
