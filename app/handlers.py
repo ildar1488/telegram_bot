@@ -1,9 +1,12 @@
 from aiogram import F, Router
 from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart, Command, StateFilter
+from aiogram.filters import CommandStart, Command, StateFilter, CommandObject
 import random
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from datetime import datetime, timedelta
+
+last_used = {}
 
 from app import keyboard as kb
 from main import cursor, connection
@@ -25,14 +28,14 @@ class State_admin(StatesGroup):
 
 # Множители в зависимости от количества патронов
 MULTIPLIERS = {
-    1: 1.5,
-    2: 2,
-    3: 3,
-    4: 4,
-    5: 5,
-    6: 7,
-    7: 10,
-    8: 15
+    1: 1.1,
+    2: 1.3,
+    3: 1.5,
+    4: 1.7,
+    5: 1.9,
+    6: 2.5,
+    7: 2.7,
+    8: 2.8
 }
 
 # Хранение данных игры
@@ -74,14 +77,15 @@ async def cmd_start(message: Message):
     await message.answer('Ты теперь зарегистрирован(а)! 😊 Если ты не нажимал эту команду раньше.')
 
 @router.message(Command('info'))
-async def get_point(message: Message):
+async def info(message: Message):
     await message.answer('📝 Вот команды, которые ты можешь использовать:\n\n'
                          '/info - Список команд\n'
                          '/point - Посмотреть свои очки и уровень\n'
                          'p2p - Заработать очки 💎\n'
                          '/start - Зарегистрироваться\n'
                          '/rus_rou - Русская рулетка\n'
-                         '/list (команда доступна только админам) - показывает список пользователей')
+                         '/list (команда доступна только админам) - показывает список пользователей\n'
+                         '/edit <айди пользователя> <новые очки> <новый уровень> - изменить показатели пользователя(доступна только админам)')
 
 @router.message(Command('point'))
 async def get_point(message: Message):
@@ -96,14 +100,17 @@ async def get_point(message: Message):
 
 @router.message(F.text == 'p2p')
 async def farm(message: Message):
-    if not message.from_user:
+    user_id = message.from_user.id
+    now = datetime.now()
+
+    if user_id in last_used and now - last_used[user_id] < timedelta(minutes=5):  # Кулдаун 5 минут
+        await message.reply("⏳ Подождите 5 минут перед следующим использованием!")
         return
+
+    last_used[user_id] = now
     new_point = random.randint(1, 20)
-    update_point(new_point, message.from_user.id)
-    try:
-        await message.reply(f'🎉 Вы заработали {new_point} очков! 🚀🚀🚀')
-    except:
-        await message.answer(f'🎉 Вы заработали {new_point} очков! 🚀🚀🚀')
+    update_point(new_point, user_id)
+    await message.reply(f'🎉 Вы заработали {new_point} очков!')
 
 @router.message(Command('admin'))
 async def admin(message: Message, state: FSMContext):
@@ -245,7 +252,7 @@ async def shoot(callback: CallbackQuery, state: FSMContext):
 
     # Бонус за серию выстрелов
     if game['consecutive_shots'] >= 2:
-        bonus = 0.5 * game['original_multiplier'] if game['consecutive_shots'] == 2 else 0.25 * game['original_multiplier']
+        bonus = 0.5 * game['original_multiplier'] if game['consecutive_shots'] == 2 else 0.05 * game['original_multiplier']
         game['current_multiplier'] += bonus
 
     await update_game_message(callback.message, game)
@@ -304,3 +311,46 @@ async def update_game_message(message: Message, game):
     )
     
     await message.edit_text(text, reply_markup=kb.get_game_keyboard())
+    
+@router.message(Command("edit"))
+async def handle_edit_command(message: Message, command: CommandObject):
+    # Проверка прав администратора (уровень -1)
+    try:
+        cursor.execute('SELECT level FROM UsersAndPointDatabese WHERE id = ?', (message.from_user.id,))
+        user_level = cursor.fetchone()
+        if not user_level or user_level[0] != -1:
+            await message.answer("🚫 Ошибка: Недостаточно прав! Только админы (level=-1) могут редактировать.")
+            return
+    except Exception as e:
+        await message.answer(f"❌ Ошибка проверки прав: {e}")
+        return
+
+    # Проверка аргументов команды
+    if not command.args:
+        await message.answer("❌ Укажите аргументы: /edit <ID> <новый point> <новый level>")
+        return
+
+    args = command.args.split()
+    if len(args) != 3:
+        await message.answer("❌ Нужно 3 аргумента: /edit <ID> <point> <level>")
+        return
+
+    # Проверка, что аргументы - числа
+    try:
+        user_id = int(args[0])
+        new_point = int(args[1])
+        new_level = int(args[2])
+    except ValueError:
+        await message.answer("❌ Все аргументы должны быть числами!")
+        return
+
+    # Обновление данных
+    try:
+        cursor.execute(
+            'UPDATE UsersAndPointDatabese SET point = ?, level = ? WHERE id = ?',
+            (new_point, new_level, user_id)
+        )
+        connection.commit()
+        await message.answer(f"✅ Данные пользователя {user_id} обновлены!")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при обновлении: {e}")
